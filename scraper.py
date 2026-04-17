@@ -158,10 +158,10 @@ def translate_article(text: str, model: str) -> dict:
         resp = requests.post(OLLAMA_URL, json={
             "model": model,
             "prompt": (
-                "Read this German news article and respond in English only.\n"
+                "Read this German news article and respond as follows.\n"
                 "Format your response exactly as:\n"
                 "SUMMARY:\n<2-3 sentence summary in English>\n\n"
-                "ELI5:\n<1-2 sentence explanation for a child>\n\n"
+                "ELI5:\n<1-2 sentence explanation for a child in German>\n\n"
                 f"Article:\n{text}"
             ),
             "stream": False,
