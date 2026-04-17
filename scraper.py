@@ -143,25 +143,53 @@ def fetch_all_texts(articles: list[dict], max_workers: int = 8) -> list[dict]:
     return results
 
 
-def translate_article(text: str, model: str) -> str | None:
-    """Translate and summarize a German article via Ollama."""
+def is_ollama_running() -> bool:
+    """Return True if the Ollama server is reachable."""
+    try:
+        requests.get("http://localhost:11434/api/tags", timeout=3)
+        return True
+    except Exception:
+        return False
+
+
+def translate_article(text: str, model: str) -> dict:
+    """Translate a German article via Ollama. Returns translation, summary and eli5 fields."""
     try:
         resp = requests.post(OLLAMA_URL, json={
             "model": model,
             "prompt": (
                 "Translate this German news article to English, "
-                "then provide a 2-3 sentence summary.\n"
-                "Format your response as:\n"
-                "TRANSLATION:\n<full translation>\n\nSUMMARY:\n<summary>\n\n"
+                "provide a 2-3 sentence summary, and explain it like I'm 5 years old.\n"
+                "Format your response exactly as:\n"
+                "TRANSLATION:\n<full translation>\n\n"
+                "SUMMARY:\n<2-3 sentence summary>\n\n"
+                "ELI5:\n<1-2 sentence explanation for a child>\n\n"
                 f"Article:\n{text}"
             ),
             "stream": False,
         }, timeout=120)
         resp.raise_for_status()
-        return resp.json()["response"]
+        raw = resp.json()["response"]
+        return _parse_ollama_response(raw)
     except Exception as e:
         print(f"    [!] Translation failed: {e}")
-        return None
+        return {"translation": None, "summary": None, "eli5": None}
+
+
+def _parse_ollama_response(raw: str) -> dict:
+    """Extract TRANSLATION, SUMMARY and ELI5 sections from the model response."""
+    sections = {"translation": None, "summary": None, "eli5": None}
+    markers = [("TRANSLATION:", "translation"), ("SUMMARY:", "summary"), ("ELI5:", "eli5")]
+    for i, (marker, key) in enumerate(markers):
+        start = raw.find(marker)
+        if start == -1:
+            continue
+        start += len(marker)
+        # End is the start of the next marker, or end of string
+        next_markers = [raw.find(m, start) for m, _ in markers[i + 1:] if raw.find(m, start) != -1]
+        end = min(next_markers) if next_markers else len(raw)
+        sections[key] = raw[start:end].strip() or None
+    return sections
 
 
 def translate_all(articles: list[dict], model: str) -> list[dict]:
@@ -170,8 +198,8 @@ def translate_all(articles: list[dict], model: str) -> list[dict]:
     results = []
     for i, article in enumerate(articles, 1):
         text = article.get("full_text")
-        translation = translate_article(text, model) if text else None
-        results.append({**article, "translation": translation})
+        fields = translate_article(text, model) if text else {"translation": None, "summary": None, "eli5": None}
+        results.append({**article, **fields})
         print(f"    → {i}/{len(articles)}: {article['title'][:60]}")
     return results
 
@@ -265,6 +293,10 @@ def export_markdown(articles: list[dict], from_date: datetime, to_date: datetime
             lines.append(f"\n### Original (German)\n\n{a['full_text']}")
         if a.get("translation"):
             lines.append(f"\n### Translation & Summary (English)\n\n{a['translation']}")
+            if a.get("summary"):
+                lines.append(f"\n**Summary:** {a['summary']}")
+        if a.get("eli5"):
+            lines.append(f"\n**ELI5:** {a['eli5']}")
         lines.append("\n---\n")
 
     md_file.write_text("\n".join(lines), encoding="utf-8")
@@ -274,8 +306,12 @@ def export_markdown(articles: list[dict], from_date: datetime, to_date: datetime
 def run(from_date: datetime, to_date: datetime | None = None, translate: bool = False, model: str = "qwen2.5:3b"):
     articles = scrape(from_date=from_date, to_date=to_date)
     articles = fetch_all_texts(articles)
+
     if translate:
-        articles = translate_all(articles, model=model)
+        if is_ollama_running():
+            articles = translate_all(articles, model=model)
+        else:
+            print("[!] Ollama is not running — skipping translation. Start it with: ollama serve")
 
     output = {
         "scraped_at": datetime.now().isoformat(),
