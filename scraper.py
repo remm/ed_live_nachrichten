@@ -153,16 +153,14 @@ def is_ollama_running() -> bool:
 
 
 def translate_article(text: str, model: str) -> dict:
-    """Translate a German article via Ollama. Returns translation, summary and eli5 fields."""
+    """Summarise and ELI5 a German article in English via Ollama."""
     try:
         resp = requests.post(OLLAMA_URL, json={
             "model": model,
             "prompt": (
-                "Translate this German news article to English, "
-                "provide a 2-3 sentence summary, and explain it like I'm 5 years old.\n"
+                "Read this German news article and respond in English only.\n"
                 "Format your response exactly as:\n"
-                "TRANSLATION:\n<full translation>\n\n"
-                "SUMMARY:\n<2-3 sentence summary>\n\n"
+                "SUMMARY:\n<2-3 sentence summary in English>\n\n"
                 "ELI5:\n<1-2 sentence explanation for a child>\n\n"
                 f"Article:\n{text}"
             ),
@@ -173,19 +171,18 @@ def translate_article(text: str, model: str) -> dict:
         return _parse_ollama_response(raw)
     except Exception as e:
         print(f"    [!] Translation failed: {e}")
-        return {"translation": None, "summary": None, "eli5": None}
+        return {"summary_en": None, "eli5": None}
 
 
 def _parse_ollama_response(raw: str) -> dict:
-    """Extract TRANSLATION, SUMMARY and ELI5 sections from the model response."""
-    sections = {"translation": None, "summary": None, "eli5": None}
-    markers = [("TRANSLATION:", "translation"), ("SUMMARY:", "summary"), ("ELI5:", "eli5")]
+    """Extract SUMMARY and ELI5 sections from the model response."""
+    sections = {"summary_en": None, "eli5": None}
+    markers = [("SUMMARY:", "summary_en"), ("ELI5:", "eli5")]
     for i, (marker, key) in enumerate(markers):
         start = raw.find(marker)
         if start == -1:
             continue
         start += len(marker)
-        # End is the start of the next marker, or end of string
         next_markers = [raw.find(m, start) for m, _ in markers[i + 1:] if raw.find(m, start) != -1]
         end = min(next_markers) if next_markers else len(raw)
         sections[key] = raw[start:end].strip() or None
@@ -198,7 +195,7 @@ def translate_all(articles: list[dict], model: str) -> list[dict]:
     results = []
     for i, article in enumerate(articles, 1):
         text = article.get("full_text")
-        fields = translate_article(text, model) if text else {"translation": None, "summary": None, "eli5": None}
+        fields = translate_article(text, model) if text else {"summary_en": None, "eli5": None}
         results.append({**article, **fields})
         print(f"    → {i}/{len(articles)}: {article['title'][:60]}")
     return results
@@ -291,10 +288,8 @@ def export_markdown(articles: list[dict], from_date: datetime, to_date: datetime
             lines.append(f"\n> {a['summary']}")
         if a.get("full_text"):
             lines.append(f"\n### Original (German)\n\n{a['full_text']}")
-        if a.get("translation"):
-            lines.append(f"\n### Translation & Summary (English)\n\n{a['translation']}")
-            if a.get("summary"):
-                lines.append(f"\n**Summary:** {a['summary']}")
+        if a.get("summary_en"):
+            lines.append(f"\n**Summary:** {a['summary_en']}")
         if a.get("eli5"):
             lines.append(f"\n**ELI5:** {a['eli5']}")
         lines.append("\n---\n")
