@@ -152,18 +152,18 @@ def is_ollama_running() -> bool:
         return False
 
 
+def _load_prompt(text: str) -> str:
+    prompt_file = Path(__file__).parent / "prompt.txt"
+    template = prompt_file.read_text(encoding="utf-8")
+    return template.replace("{text}", text)
+
+
 def translate_article(text: str, model: str) -> dict:
     """Summarise and ELI5 a German article in English via Ollama."""
     try:
         resp = requests.post(OLLAMA_URL, json={
             "model": model,
-            "prompt": (
-                "Read this German news article and respond as follows.\n"
-                "Format your response exactly as:\n"
-                "SUMMARY:\n<2-3 sentence summary in English>\n\n"
-                "ELI5:\n<1-2 sentence explanation for a child in German>\n\n"
-                f"Article:\n{text}"
-            ),
+            "prompt": _load_prompt(text),
             "stream": False,
         }, timeout=120)
         resp.raise_for_status()
@@ -177,15 +177,16 @@ def translate_article(text: str, model: str) -> dict:
 def _parse_ollama_response(raw: str) -> dict:
     """Extract SUMMARY and ELI5 sections from the model response."""
     sections = {"summary_en": None, "eli5": None}
-    markers = [("SUMMARY:", "summary_en"), ("ELI5:", "eli5")]
-    for i, (marker, key) in enumerate(markers):
+    targets = [("SUMMARY:", "summary_en"), ("ELI5:", "eli5")]
+    stop_markers = ["SUMMARY:", "ELI5:", "Article:"]
+    for marker, key in targets:
         start = raw.find(marker)
         if start == -1:
             continue
-        start += len(marker)
-        next_markers = [raw.find(m, start) for m, _ in markers[i + 1:] if raw.find(m, start) != -1]
-        end = min(next_markers) if next_markers else len(raw)
-        sections[key] = raw[start:end].strip() or None
+        content_start = start + len(marker)
+        stops = [p for m in stop_markers if (p := raw.find(m, content_start)) != -1]
+        end = min(stops) if stops else len(raw)
+        sections[key] = raw[content_start:end].strip() or None
     return sections
 
 

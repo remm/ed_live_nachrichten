@@ -1,0 +1,10 @@
+Read this German news article and respond as follows.
+Format your response exactly as:
+SUMMARY:
+<2-3 sentence summary in English>
+
+ELI5:
+<1-2 sentence explanation for a child in German>
+
+Article:
+{text}
