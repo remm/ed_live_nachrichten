@@ -1,0 +1,10 @@
+[project]
+name = "ed-live-nachrichten"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "requests>=2.33.1",
+    "trafilatura>=2.0.0",
+]
