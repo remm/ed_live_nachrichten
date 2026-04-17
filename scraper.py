@@ -4,6 +4,12 @@ API: https://ed-live.de/ajax/nachrichten_ajax.php
 - First page: GET (no params)
 - Next pages: POST with lastId=<id>&lastDate=<YYYY-MM-DD>
 - Pagination ends when lastId stops changing
+
+Usage:
+  uv run python scraper.py 2026-04-17
+  uv run python scraper.py 2026-04-10 2026-04-17
+  uv run python scraper.py 2026-04-17 --translate
+  uv run python scraper.py 2026-04-17 --translate --model qwen2.5:7b
 """
 
 import json
@@ -18,6 +24,7 @@ from bs4 import BeautifulSoup
 BASE_URL = "https://ed-live.de"
 INTERNAL_BASE = "https://www.ed-live.de"
 API_URL = f"{BASE_URL}/ajax/nachrichten_ajax.php"
+OLLAMA_URL = "http://localhost:11434/api/generate"
 OUTPUT_FILE = Path("articles.json")
 
 HEADERS = {
@@ -136,6 +143,39 @@ def fetch_all_texts(articles: list[dict], max_workers: int = 8) -> list[dict]:
     return results
 
 
+def translate_article(text: str, model: str) -> str | None:
+    """Translate and summarize a German article via Ollama."""
+    try:
+        resp = requests.post(OLLAMA_URL, json={
+            "model": model,
+            "prompt": (
+                "Translate this German news article to English, "
+                "then provide a 2-3 sentence summary.\n"
+                "Format your response as:\n"
+                "TRANSLATION:\n<full translation>\n\nSUMMARY:\n<summary>\n\n"
+                f"Article:\n{text}"
+            ),
+            "stream": False,
+        }, timeout=120)
+        resp.raise_for_status()
+        return resp.json()["response"]
+    except Exception as e:
+        print(f"    [!] Translation failed: {e}")
+        return None
+
+
+def translate_all(articles: list[dict], model: str) -> list[dict]:
+    """Sequentially translate articles — Ollama runs one request at a time efficiently."""
+    print(f"[*] Translating {len(articles)} articles with {model}...")
+    results = []
+    for i, article in enumerate(articles, 1):
+        text = article.get("full_text")
+        translation = translate_article(text, model) if text else None
+        results.append({**article, "translation": translation})
+        print(f"    → {i}/{len(articles)}: {article['title'][:60]}")
+    return results
+
+
 def fetch_page(last_id: str | None = None, last_date: str | None = None) -> dict:
     if last_id and last_date:
         resp = requests.post(
@@ -222,22 +262,27 @@ def export_markdown(articles: list[dict], from_date: datetime, to_date: datetime
         if a.get("summary"):
             lines.append(f"\n> {a['summary']}")
         if a.get("full_text"):
-            lines.append(f"\n{a['full_text']}")
+            lines.append(f"\n### Original (German)\n\n{a['full_text']}")
+        if a.get("translation"):
+            lines.append(f"\n### Translation & Summary (English)\n\n{a['translation']}")
         lines.append("\n---\n")
 
     md_file.write_text("\n".join(lines), encoding="utf-8")
     print(f"[+] Markdown saved to {md_file}")
 
 
-def run(from_date: datetime, to_date: datetime | None = None):
+def run(from_date: datetime, to_date: datetime | None = None, translate: bool = False, model: str = "qwen2.5:3b"):
     articles = scrape(from_date=from_date, to_date=to_date)
     articles = fetch_all_texts(articles)
+    if translate:
+        articles = translate_all(articles, model=model)
 
     output = {
         "scraped_at": datetime.now().isoformat(),
         "source": API_URL,
         "from_date": from_date.strftime("%Y-%m-%d"),
         "to_date": (to_date or datetime.now()).strftime("%Y-%m-%d"),
+        "translated": translate,
         "count": len(articles),
         "articles": articles,
     }
@@ -247,16 +292,18 @@ def run(from_date: datetime, to_date: datetime | None = None):
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    # Usage:
-    #   python scraper.py 2026-04-10              # from date until today
-    #   python scraper.py 2026-04-10 2026-04-15   # date range
-    if len(sys.argv) < 2:
-        print("Usage: python scraper.py <from_date> [to_date]")
-        print("       Dates in YYYY-MM-DD format")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Scrape ed-live.de/nachrichten")
+    parser.add_argument("from_date", help="Start date (YYYY-MM-DD)")
+    parser.add_argument("to_date", nargs="?", help="End date (YYYY-MM-DD), defaults to today")
+    parser.add_argument("--translate", action="store_true", help="Translate articles to English via Ollama")
+    parser.add_argument("--model", default="qwen2.5:3b", help="Ollama model to use (default: qwen2.5:3b)")
+    args = parser.parse_args()
 
-    _from = parse_date(sys.argv[1])
-    _to = parse_date(sys.argv[2]) if len(sys.argv) > 2 else None
-    run(from_date=_from, to_date=_to)
+    run(
+        from_date=parse_date(args.from_date),
+        to_date=parse_date(args.to_date) if args.to_date else None,
+        translate=args.translate,
+        model=args.model,
+    )
